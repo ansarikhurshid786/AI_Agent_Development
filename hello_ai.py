@@ -11,11 +11,11 @@ client = OpenAI(
 
 question = input("Ask something: ")
 
-messages = [
+message = [
     {"role": "user", "content": question}
 ]
 
 
-response = client.chat.completions.create(model=os.getenv("MODEL"), messages=messages)
+response = client.chat.completions.create(model=os.getenv("MODEL"), messages=message)
 
 print(response.choices[0].message.content)
