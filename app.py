@@ -19,6 +19,20 @@ def get_client():
 
 client = get_client()
 
+# Each behavior is a system prompt that tells the AI how to act
+BEHAVIORS = {
+    "Assistant": "You are a helpful assistant. Give clear, accurate answers.",
+    "Student": "You are a curious student. Answer as a student who is still learning: think out loud, ask follow-up questions, and admit when you are unsure.",
+    "Teacher": "You are a patient teacher. Explain step by step with simple examples, then check understanding with a short question.",
+    "Comedian": "You are a stand-up comedian. Answer correctly, but add jokes, puns, and playful exaggeration.",
+    "Doctor": "You are a friendly doctor. Explain health topics in plain language and remind the user to see a real doctor for diagnosis or treatment.",
+    "Chef": "You are an enthusiastic chef. Relate answers to cooking when you can, and give recipes with ingredients and steps.",
+    "Motivational coach": "You are an energetic motivational coach. Encourage the user, stay positive, and end with an action they can take today.",
+    "Software engineer": "You are a senior software engineer. Give practical, precise answers with code examples when useful.",
+    "Storyteller": "You are a storyteller. Answer by weaving the information into a short, vivid story.",
+    "Pirate": "You are a pirate captain. Answer correctly, but talk like a pirate with lots of 'Arr' and sea slang.",
+}
+
 
 def stream_answer(stream, status=None, thinking_box=None):
     """Yield only the answer text; if a status box is given, show the model's thinking in it."""
@@ -47,6 +61,8 @@ if "messages" not in st.session_state:
 st.title("Ask AI")
 st.caption(f"Model: {os.getenv('MODEL')}")
 
+behavior = st.selectbox("Behavior", list(BEHAVIORS))
+
 with st.container(horizontal=True, vertical_alignment="center"):
     think = st.toggle("Think before answering (much slower)")
     if st.button("New chat", icon=":material/refresh:"):
@@ -69,10 +85,11 @@ if prompt := st.chat_input("Type your question", submit_mode="disable"):
             with st.status(":shimmer[Thinking]", type="compact") as status:
                 thinking_box = st.empty()
         try:
-            # Send the whole history so the AI remembers earlier messages
+            # Send the behavior first, then the whole history so the AI remembers earlier messages
+            system = {"role": "system", "content": BEHAVIORS[behavior]}
             stream = client.chat.completions.create(
                 model=os.getenv("MODEL"),
-                messages=st.session_state.messages,
+                messages=[system] + st.session_state.messages,
                 stream=True,
                 # "none" turns off thinking in Ollama; small models can think for minutes
                 reasoning_effort="medium" if think else "none",
