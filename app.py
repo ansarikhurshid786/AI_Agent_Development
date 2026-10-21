@@ -4,6 +4,9 @@ import streamlit as st
 from openai import OpenAI, APIConnectionError
 from dotenv import load_dotenv
 
+from tool_manager import ToolManager
+from tools import TOOLS
+
 load_dotenv()
 
 st.set_page_config(page_title="Ask AI", page_icon=":material/smart_toy:")
@@ -18,6 +21,9 @@ def get_client():
 
 
 client = get_client()
+
+# Tools answer some messages directly (time, dice, passwords...) instead of the AI
+tool_manager = ToolManager(TOOLS)
 
 # Each behavior is a system prompt that tells the AI how to act
 BEHAVIORS = {
@@ -65,13 +71,29 @@ behavior = st.selectbox("Behavior", list(BEHAVIORS))
 
 with st.container(horizontal=True, vertical_alignment="center"):
     think = st.toggle("Think before answering (much slower)")
+    use_tools = st.toggle("Use tools", value=True)
     if st.button("New chat", icon=":material/refresh:"):
         st.session_state.messages = []
         st.rerun()
 
+with st.expander(f"{len(tool_manager.tools)} tools available", icon=":material/build:"):
+    st.dataframe(
+        [{"Tool": t.name, "What it does": t.description, "Try typing": t.example} for t in tool_manager.tools],
+        hide_index=True,
+        alt="Tools the chat can run and an example message for each",
+    )
+
+
+def show_tool_used(tool):
+    with st.status(f"Used tool: {tool.name}", type="step", state="complete"):
+        st.caption(tool.description)
+
+
 # Show the conversation so far
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
+        if tool := tool_manager.get(msg.get("tool")):
+            show_tool_used(tool)
         st.markdown(msg["content"])
 
 if prompt := st.chat_input("Type your question", submit_mode="disable"):
@@ -79,32 +101,43 @@ if prompt := st.chat_input("Type your question", submit_mode="disable"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
+    # If the message matches a tool, the tool answers and the AI is skipped
+    tool_call = tool_manager.run(prompt) if use_tools else None
+
     with st.chat_message("assistant"):
-        status = thinking_box = None
-        if think:
-            with st.status(":shimmer[Thinking]", type="compact") as status:
-                thinking_box = st.empty()
-        try:
-            # Send the behavior first, then the whole history so the AI remembers earlier messages
-            system = {"role": "system", "content": BEHAVIORS[behavior]}
-            stream = client.chat.completions.create(
-                model=os.getenv("MODEL"),
-                messages=[system] + st.session_state.messages,
-                stream=True,
-                # "none" turns off thinking in Ollama; small models can think for minutes
-                reasoning_effort="medium" if think else "none",
-            )
-            answer = st.write_stream(stream_answer(stream, status, thinking_box))
-            if answer:
-                st.session_state.messages.append({"role": "assistant", "content": answer})
-            else:
-                st.warning("The model didn't give an answer. Try again or rephrase.")
-                st.session_state.messages.pop()
-        except APIConnectionError:
-            if status:
-                status.update(label="Failed", state="error")
-            st.error(
-                "Start Ollama with `ollama serve` (or open the Ollama app), then try again.",
-                title="Can't reach the AI server",
-            )
-            st.session_state.messages.pop()  # drop the unanswered question
+        if tool_call:
+            tool, answer = tool_call
+            show_tool_used(tool)
+            st.markdown(answer)
+            st.session_state.messages.append({"role": "assistant", "content": answer, "tool": tool.name})
+        else:
+            status = thinking_box = None
+            if think:
+                with st.status(":shimmer[Thinking]", type="compact") as status:
+                    thinking_box = st.empty()
+            try:
+                # Send the behavior first, then the whole history so the AI remembers earlier messages
+                system = {"role": "system", "content": BEHAVIORS[behavior]}
+                # The API only accepts role and content, so leave out our extra "tool" field
+                history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+                stream = client.chat.completions.create(
+                    model=os.getenv("MODEL"),
+                    messages=[system] + history,
+                    stream=True,
+                    # "none" turns off thinking in Ollama; small models can think for minutes
+                    reasoning_effort="medium" if think else "none",
+                )
+                answer = st.write_stream(stream_answer(stream, status, thinking_box))
+                if answer:
+                    st.session_state.messages.append({"role": "assistant", "content": answer})
+                else:
+                    st.warning("The model didn't give an answer. Try again or rephrase.")
+                    st.session_state.messages.pop()
+            except APIConnectionError:
+                if status:
+                    status.update(label="Failed", state="error")
+                st.error(
+                    "Start Ollama with `ollama serve` (or open the Ollama app), then try again.",
+                    title="Can't reach the AI server",
+                )
+                st.session_state.messages.pop()  # drop the unanswered question
