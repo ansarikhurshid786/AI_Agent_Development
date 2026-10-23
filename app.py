@@ -3,6 +3,7 @@ import time
 import streamlit as st
 from openai import OpenAI, APIConnectionError
 from dotenv import load_dotenv
+from pypdf import PdfReader
 
 from tool_manager import ToolManager
 from tools import TOOLS
@@ -60,6 +61,21 @@ def stream_answer(stream, status=None, thinking_box=None):
             yield delta.content
 
 
+def read_file(file):
+    """Return the text inside an uploaded .txt or .pdf file."""
+    if file.name.lower().endswith(".pdf"):
+        return "\n".join(page.extract_text() or "" for page in PdfReader(file).pages)
+    return file.read().decode("utf-8", errors="ignore")
+
+
+def to_api_message(msg):
+    """The API only accepts role and content, so put the file text before the question and drop our extra fields."""
+    content = msg["content"]
+    if msg.get("file_text"):
+        content = f"File '{msg['file']}':\n{msg['file_text']}\n\nQuestion: {content}"
+    return {"role": msg["role"], "content": content}
+
+
 # Remember the conversation between reruns
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -94,15 +110,33 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         if tool := tool_manager.get(msg.get("tool")):
             show_tool_used(tool)
+        if msg.get("file"):
+            st.caption(f":material/attach_file: {msg['file']}")
         st.markdown(msg["content"])
 
-if prompt := st.chat_input("Type your question", submit_mode="disable"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+if prompt := st.chat_input(
+    "Type your question or attach a .txt / .pdf file",
+    submit_mode="disable",
+    accept_file=True,
+    file_type=["txt", "pdf"],
+):
+    file = prompt.files[0] if prompt.files else None
+    question = prompt.text or "Summarize this file."
 
-    # If the message matches a tool, the tool answers and the AI is skipped
-    tool_call = tool_manager.run(prompt) if use_tools else None
+    # Keep the file text separately so the chat shows only the question
+    user_msg = {"role": "user", "content": question}
+    if file:
+        user_msg["file"] = file.name
+        user_msg["file_text"] = read_file(file)
+    st.session_state.messages.append(user_msg)
+
+    with st.chat_message("user"):
+        if file:
+            st.caption(f":material/attach_file: {file.name}")
+        st.markdown(question)
+
+    # If the message matches a tool, the tool answers and the AI is skipped (not when a file is attached)
+    tool_call = tool_manager.run(question) if use_tools and not file else None
 
     with st.chat_message("assistant"):
         if tool_call:
@@ -118,8 +152,7 @@ if prompt := st.chat_input("Type your question", submit_mode="disable"):
             try:
                 # Send the behavior first, then the whole history so the AI remembers earlier messages
                 system = {"role": "system", "content": BEHAVIORS[behavior]}
-                # The API only accepts role and content, so leave out our extra "tool" field
-                history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+                history = [to_api_message(m) for m in st.session_state.messages]
                 stream = client.chat.completions.create(
                     model=os.getenv("MODEL"),
                     messages=[system] + history,
