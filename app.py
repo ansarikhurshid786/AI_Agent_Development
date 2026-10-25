@@ -86,7 +86,7 @@ st.caption(f"Model: {os.getenv('MODEL')}")
 behavior = st.selectbox("Behavior", list(BEHAVIORS))
 
 with st.container(horizontal=True, vertical_alignment="center"):
-    think = st.toggle("Think before answering (much slower)")
+    think = st.toggle("Think before answering (much slower)", value=True)
     use_tools = st.toggle("Use tools", value=True)
     if st.button("New chat", icon=":material/refresh:"):
         st.session_state.messages = []
