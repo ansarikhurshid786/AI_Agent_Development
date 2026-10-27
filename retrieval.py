@@ -64,10 +64,16 @@ def search_chunks(question, min_similarity=MIN_SIMILARITY, limit=MAX_CHUNKS):
 
 
 def build_prompt(question, chunks):
-    """Put the found chunks above the question so the AI answers from them."""
+    """Put the found chunks above the question so the AI can answer from them."""
     context = "\n\n".join(f"[{i}] (from {c.source})\n{c.content}" for i, c in enumerate(chunks, 1))
+    # Similarity means "same topic", not "contains the answer": "What is React Native?"
+    # matches a CV that mentions React Native but doesn't explain it. So the AI may
+    # fall back to its own knowledge, but must not invent facts about the documents.
     return (
-        "Answer the question using the context below. "
-        "If the context does not contain the answer, say so.\n\n"
-        f"Context:\n{context}\n\nQuestion: {question}"
+        "Here are excerpts from the user's documents that may help.\n"
+        "- If they answer the question, answer from them.\n"
+        "- If they don't, ignore them and answer from your own knowledge.\n"
+        "- Never make up facts about the people or things in the documents. "
+        "If the question is about them and the answer isn't in the excerpts, say it isn't in the documents.\n\n"
+        f"Excerpts:\n{context}\n\nQuestion: {question}"
     )
