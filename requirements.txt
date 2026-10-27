@@ -2,3 +2,4 @@ openai
 python-dotenv
 streamlit
 pypdf
+psycopg2-binary

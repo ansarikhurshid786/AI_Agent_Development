@@ -4,7 +4,9 @@ import streamlit as st
 from openai import OpenAI, APIConnectionError
 from dotenv import load_dotenv
 from pypdf import PdfReader
+from psycopg2 import OperationalError
 
+from retrieval import MIN_SIMILARITY, build_prompt, search_chunks
 from tool_manager import ToolManager
 from tools import TOOLS
 
@@ -69,8 +71,10 @@ def read_file(file):
 
 
 def to_api_message(msg):
-    """The API only accepts role and content, so put the file text before the question and drop our extra fields."""
+    """The API only accepts role and content, so put the file text or found chunks before the question and drop our extra fields."""
     content = msg["content"]
+    if msg.get("chunks"):
+        content = build_prompt(content, msg["chunks"])
     if msg.get("file_text"):
         content = f"File '{msg['file']}':\n{msg['file_text']}\n\nQuestion: {content}"
     return {"role": msg["role"], "content": content}
@@ -88,6 +92,7 @@ behavior = st.selectbox("Behavior", list(BEHAVIORS))
 with st.container(horizontal=True, vertical_alignment="center"):
     think = st.toggle("Think before answering (much slower)", value=True)
     use_tools = st.toggle("Use tools", value=True)
+    search_docs = st.toggle("Search my documents", value=True)
     if st.button("New chat", icon=":material/refresh:"):
         st.session_state.messages = []
         st.rerun()
@@ -105,6 +110,17 @@ def show_tool_used(tool):
         st.caption(tool.description)
 
 
+def show_chunks(chunks):
+    """Show which chunks from the database were added to the question."""
+    if not chunks:
+        st.caption(f"No document chunk scored {MIN_SIMILARITY} or higher, so the AI answers on its own.")
+        return
+    with st.status(f"Found {len(chunks)} matching chunks", type="step", state="complete"):
+        for chunk in chunks:
+            st.caption(f"{chunk.source} · similarity {chunk.similarity:.2f}")
+            st.text(chunk.content)
+
+
 # Show the conversation so far
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -113,6 +129,8 @@ for msg in st.session_state.messages:
         if msg.get("file"):
             st.caption(f":material/attach_file: {msg['file']}")
         st.markdown(msg["content"])
+        if "chunks" in msg:
+            show_chunks(msg["chunks"])
 
 if prompt := st.chat_input(
     "Type your question or attach a .txt / .pdf file",
@@ -130,13 +148,21 @@ if prompt := st.chat_input(
         user_msg["file_text"] = read_file(file)
     st.session_state.messages.append(user_msg)
 
+    # If the message matches a tool, the tool answers and the AI is skipped (not when a file is attached)
+    tool_call = tool_manager.run(question) if use_tools and not file else None
+
     with st.chat_message("user"):
         if file:
             st.caption(f":material/attach_file: {file.name}")
         st.markdown(question)
-
-    # If the message matches a tool, the tool answers and the AI is skipped (not when a file is attached)
-    tool_call = tool_manager.run(question) if use_tools and not file else None
+        # Only search when the AI will answer: tools and attached files bring their own text
+        if search_docs and not tool_call and not file:
+            try:
+                with st.spinner("Searching your documents..."):
+                    user_msg["chunks"] = search_chunks(question)
+                show_chunks(user_msg["chunks"])
+            except (APIConnectionError, OperationalError) as error:
+                st.warning(f"Couldn't search your documents, so the AI answers on its own: {error}")
 
     with st.chat_message("assistant"):
         if tool_call:
