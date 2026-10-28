@@ -121,9 +121,20 @@ def run_tool(question):
     return (tool, answer) if answer else None
 
 
-def show_tool_used(tool):
+# The AI turns the tool's short result into a friendly reply
+NATURAL_ANSWER_PROMPT = (
+    "User asked: {question}\n"
+    "The tool returned: {result}\n"
+    "Rewrite the tool's result as a short, friendly reply to the user. "
+    "Keep all facts and numbers exactly the same and add nothing new."
+)
+
+
+def show_tool_used(tool, result=None):
     with st.status(f"Used tool: {tool.name}", type="step", state="complete"):
         st.caption(tool.description)
+        if result:
+            st.markdown(result)
 
 
 def show_chunks(chunks):
@@ -141,7 +152,7 @@ def show_chunks(chunks):
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         if tool := tool_manager.get(msg.get("tool")):
-            show_tool_used(tool)
+            show_tool_used(tool, msg.get("tool_result"))
         if msg.get("file"):
             st.caption(f":material/attach_file: {msg['file']}")
         st.markdown(msg["content"])
@@ -184,10 +195,30 @@ if prompt := st.chat_input(
 
     with st.chat_message("assistant"):
         if tool_call:
-            tool, answer = tool_call
-            show_tool_used(tool)
-            st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer, "tool": tool.name})
+            tool, result = tool_call
+            show_tool_used(tool, result)
+            answer = None
+            try:
+                stream = client.chat.completions.create(
+                    model=os.getenv("MODEL"),
+                    messages=[
+                        {"role": "system", "content": BEHAVIORS[behavior]},
+                        {"role": "user", "content": NATURAL_ANSWER_PROMPT.format(question=question, result=result)},
+                    ],
+                    stream=True,
+                    # No thinking needed, the tool already has the answer
+                    reasoning_effort="none",
+                )
+                answer = st.write_stream(stream_answer(stream))
+            except APIConnectionError:
+                pass
+            # If the AI can't reply, show the tool's own result
+            if not answer:
+                answer = result
+                st.markdown(answer)
+            st.session_state.messages.append(
+                {"role": "assistant", "content": answer, "tool": tool.name, "tool_result": result}
+            )
         else:
             status = thinking_box = None
             if think:
