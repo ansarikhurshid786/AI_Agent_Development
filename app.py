@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from pypdf import PdfReader
 from psycopg2 import OperationalError
 
+from planner import choose_tool
 from retrieval import MIN_SIMILARITY, build_prompt, search_chunks
 from tool_manager import ToolManager
 from tools import TOOLS
@@ -105,6 +106,21 @@ with st.expander(f"{len(tool_manager.tools)} tools available", icon=":material/b
     )
 
 
+def run_tool(question):
+    """Let the planner pick a tool and run it. Returns (tool, answer), or None so the AI answers instead."""
+    try:
+        tool = choose_tool(question)
+    except APIConnectionError:
+        tool = tool_manager.find(question)  # AI server is down, so pick the tool by keywords
+    if tool is None:
+        return None
+    try:
+        answer = tool.run(question)
+    except Exception as error:
+        answer = f"Sorry, the {tool.name} tool failed: {error}"
+    return (tool, answer) if answer else None
+
+
 def show_tool_used(tool):
     with st.status(f"Used tool: {tool.name}", type="step", state="complete"):
         st.caption(tool.description)
@@ -148,13 +164,15 @@ if prompt := st.chat_input(
         user_msg["file_text"] = read_file(file)
     st.session_state.messages.append(user_msg)
 
-    # If the message matches a tool, the tool answers and the AI is skipped (not when a file is attached)
-    tool_call = tool_manager.run(question) if use_tools and not file else None
-
     with st.chat_message("user"):
         if file:
             st.caption(f":material/attach_file: {file.name}")
         st.markdown(question)
+        # If the planner picks a tool, the tool answers and the AI is skipped (not when a file is attached)
+        tool_call = None
+        if use_tools and not file:
+            with st.spinner("Choosing a tool..."):
+                tool_call = run_tool(question)
         # Only search when the AI will answer: tools and attached files bring their own text
         if search_docs and not tool_call and not file:
             try:
